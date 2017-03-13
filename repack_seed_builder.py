@@ -8,7 +8,7 @@ import operator
 import json
 import logging
 import sys
-import Levenshtein
+#import Levenshtein
 
 import MySQLdb
 
@@ -29,10 +29,17 @@ STR_TO = ["joshua_zhang@trendmicro.com.cn"]
 
 with open('config.json', 'r') as f:
     config = json.load(f)
-MASTER_DB_USER = config['MASTER_DB_USER']
-MASTER_DB_PASSWD = config['MASTER_DB_PASSWD']
-MASTER_DB_HOST = config['MASTER_DB_HOST']
-MASTER_DB_NAME = config['MASTER_DB_NAME']
+
+
+CLOUD_DB_USER = config['CLOUD_DB_USER']
+CLOUD_DB_PASSWD = config['CLOUD_DB_PASSWD']
+CLOUD_DB_HOST = config['CLOUD_DB_HOST']
+CLOUD_DB_NAME = config['CLOUD_DB_NAME']
+
+GLOBAL_DB_USER = config['GLOBAL_DB_USER']
+GLOBAL_DB_PASSWD = config['GLOBAL_DB_PASSWD']
+GLOBAL_DB_HOST = config['GLOBAL_DB_HOST']
+GLOBAL_DB_NAME = config['GLOBAL_DB_NAME']
 
 STR_LENGTH = 192
 
@@ -49,11 +56,11 @@ def connect(user, pwd, host, db):
 def cal_sha1(apk_path, logger):
     resCode = None
     implFolder = os.path.join(os.path.dirname(os.path.abspath(__file__)), "APKS/")
-    parseCmd = 'sha1sum %s' % apk_path
+    parseCmd = 'sha256sum %s' % apk_path
     timeout = 30 * 1000
     resList = Timeout.CommandTimeOut(parseCmd, timeout, ' ', logger, True, implFolder)
     for line in resList:
-        if len(line) >= 40:
+        if len(line) >= 64:
             resCode = line.split('  ')[0].strip()
             break
     return resCode
@@ -150,7 +157,7 @@ def compare_icon_hash(hash1, hash2):
 def get_app_label(conn, sha1):
     try:
         cursor = conn.cursor()
-        sql_line = ("select AppLabel from AppInfo where Sha1 = 0x%s" % sha1)
+        sql_line = ("select label from apk_mars_detection where Sha256 = 0x%s" % sha1)
         cursor.execute(sql_line)
         res = cursor.fetchone()
         if res:
@@ -164,7 +171,7 @@ def get_app_label(conn, sha1):
 def query_pkg_name(conn, sha1):
     try:
         cursor = conn.cursor()
-        sql_line = ("select PkgName from AppInfo where Sha1 = 0x%s" % sha1)
+        sql_line = ("select packageName from apk_mars_detection where Sha256 = 0x%s" % sha1)
         cursor.execute(sql_line)
         res = cursor.fetchone()
         if res:
@@ -178,7 +185,7 @@ def query_pkg_name(conn, sha1):
 def query_public_key(conn, sha1):
     try:
         cursor = conn.cursor()
-        sql_line = ("select PublicKeySha1List from AppInfo where Sha1 = 0x%s" % sha1)
+        sql_line = ("select hex(publicKeySha1) from apk_mars_detection where Sha256 = 0x%s" % sha1)
         cursor.execute(sql_line)
         res = cursor.fetchone()
         if res:
@@ -217,35 +224,30 @@ def gen_sha1_list(candidate_list):
     fl.close()
 
 
-def query_applabel(conn, sha1):
+def query_applabel(conn,sha256):
     cursor = conn.cursor()
-    tables = ["InputApkLabel_ja", "InputApkLabel_zhCN", "InputApkLabel_zhTW"]
-    res = []
-    for table in tables:
-        sql_line = ("SELECT Label "
-                    "FROM %s "
-                    "WHERE Sha1 = 0x%s" % (table, sha1))
-        cursor.execute(sql_line)
-        row = cursor.fetchone()
-        if row:
-            res.append(str(row[0]))
-        else:
-            res.append(None)
-    logger.debug(res)
-    return res
+    sql_line = ("SELECT label_ja, label_zhCN, label_zhTW FROM apk_label_info WHERE sha256 = 0x%s"  %  sha256)
+    cursor.execute(sql_line)
+    row = cursor.fetchone()
+    logger.debug(row)
+    if row:
+        return row
+    else:
+        return (None,None,None)
+    
 
 
 def insert_seed(conn, PublicKeySha1List, PkgName, RepackStrategy, LabelWeight, IconWeight, JudgmentMethod, RepackThreshold, ExFeature3, ExFeature4):
     cursor = conn.cursor()
     if ExFeature4 is None:
-        sql_line = ("INSERT INTO ApkRepackSEED ("
-                    "PublicKeySha1List, PkgName, RepackStrategy, LabelWeight, IconWeight, JudgmentMethod, RepackThreshold, ExFeature3, ExFeature4) "
-                    "VALUES ('%s', '%s', %s, %s, %s, %s, %s, '%s', NULL)" % (
+        sql_line = ("INSERT INTO apk_repack_seed ("
+                    "publicKeySha1, packageName, RepackStrategy, LabelWeight, IconWeight, JudgmentMethod, RepackThreshold, submitter, submitTime) "
+                    "VALUES (0x%s, '%s', %s, %s, %s, %s, %s, '%s', NULL)" % (
                         PublicKeySha1List, PkgName, RepackStrategy, LabelWeight, IconWeight, JudgmentMethod, RepackThreshold, ExFeature3))
     else:
-        sql_line = ("INSERT INTO ApkRepackSEED ("
-                    "PublicKeySha1List, PkgName, RepackStrategy, LabelWeight, IconWeight, JudgmentMethod, RepackThreshold, ExFeature3, Category, ExFeature4) "
-                    "VALUES ('%s', '%s', %s, %s, %s, %s, %s, '%s', 1, '%s')" % (
+        sql_line = ("INSERT INTO apk_repack_seed ("
+                    "publicKeySha1, packageName, RepackStrategy, LabelWeight, IconWeight, JudgmentMethod, RepackThreshold, submitter, Category, submitTime) "
+                    "VALUES (0x%s, '%s', %s, %s, %s, %s, %s, '%s', 1, '%s')" % (
                         PublicKeySha1List, PkgName, RepackStrategy, LabelWeight, IconWeight, JudgmentMethod, RepackThreshold, ExFeature3, ExFeature4))
 
     try:
@@ -259,9 +261,9 @@ def insert_seed(conn, PublicKeySha1List, PkgName, RepackStrategy, LabelWeight, I
 
 def check_seed_id(conn, PublicKeySha1List, PkgName):
     cursor = conn.cursor()
-    sql_line = ("SELECT SeedID "
-                "FROM ApkRepackSEED "
-                "WHERE PublicKeySha1List = '%s' AND PkgName = '%s' " % (PublicKeySha1List, PkgName))
+    sql_line = ("SELECT seedId "
+                "FROM apk_repack_seed "
+                "WHERE publicKeySha1 = 0x%s AND packageName = '%s' " % (PublicKeySha1List, PkgName))
     try:
         cursor.execute(sql_line)
         row = cursor.fetchone()
@@ -274,7 +276,7 @@ def check_seed_id(conn, PublicKeySha1List, PkgName):
 
 def insert_icon(conn, SeedID, IconHash):
     cursor = conn.cursor()
-    check_line = ("SELECT * FROM ApkRepackSeedIconHashDict WHERE IconHash = %s AND SeedID = %s")
+    check_line = ("SELECT * FROM apk_repack_seed_icon_hash WHERE IconHash = %s AND SeedID = %s")
     try:
         cursor.execute(check_line, (IconHash, SeedID))
         is_exist = cursor.fetchone()
@@ -282,7 +284,7 @@ def insert_icon(conn, SeedID, IconHash):
     except Exception, e:
         logger.error(e)
     if not is_exist:
-        sql_line = ("INSERT INTO ApkRepackSeedIconHashDict ("
+        sql_line = ("INSERT INTO apk_repack_seed_icon_hash ("
                     "SeedID, IconHash) "
                     "VALUES (%s, '%s')" % (SeedID, IconHash))
         try:
@@ -295,42 +297,42 @@ def insert_icon(conn, SeedID, IconHash):
 def insert_label(conn, SeedID, AppLabel, AppLabel_ja, AppLabel_zhCN, AppLabel_zhTW):
     cursor = conn.cursor()
     if not AppLabel_ja and not AppLabel_zhCN and not AppLabel_zhTW:
-        check_line = ("SELECT * FROM ApkRepackSeedAppLabelDict "
+        check_line = ("SELECT * FROM apk_repack_seed_app_label "
                     "WHERE SeedID = %s "
                     "AND AppLabel = %s "
                     "AND AppLabel_ja IS %s "
                     "AND AppLabel_zhCN IS  %s "
                     "AND AppLabel_zhTW IS %s")
     if not AppLabel_ja and not AppLabel_zhCN and AppLabel_zhTW:
-        check_line = ("SELECT * FROM ApkRepackSeedAppLabelDict "
+        check_line = ("SELECT * FROM apk_repack_seed_app_label "
                     "WHERE SeedID = %s "
                     "AND AppLabel = %s "
                     "AND AppLabel_ja IS %s "
                     "AND AppLabel_zhCN IS  %s "
                     "AND AppLabel_zhTW = %s")
     if not AppLabel_ja and AppLabel_zhCN and not AppLabel_zhTW:
-        check_line = ("SELECT * FROM ApkRepackSeedAppLabelDict "
+        check_line = ("SELECT * FROM apk_repack_seed_app_label "
                     "WHERE SeedID = %s "
                     "AND AppLabel = %s "
                     "AND AppLabel_ja IS %s "
                     "AND AppLabel_zhCN =  %s "
                     "AND AppLabel_zhTW IS %s")
     if not AppLabel_ja and AppLabel_zhCN and AppLabel_zhTW:
-        check_line = ("SELECT * FROM ApkRepackSeedAppLabelDict "
+        check_line = ("SELECT * FROM apk_repack_seed_app_label "
                     "WHERE SeedID = %s "
                     "AND AppLabel = %s "
                     "AND AppLabel_ja IS %s "
                     "AND AppLabel_zhCN = %s "
                     "AND AppLabel_zhTW = %s")
     if AppLabel_ja and not AppLabel_zhCN and not AppLabel_zhTW:
-        check_line = ("SELECT * FROM ApkRepackSeedAppLabelDict "
+        check_line = ("SELECT * FROM apk_repack_seed_app_label "
                     "WHERE SeedID = %s "
                     "AND AppLabel = %s "
                     "AND AppLabel_ja = %s "
                     "AND AppLabel_zhCN IS  %s "
                     "AND AppLabel_zhTW IS %s")
     if AppLabel_ja and not AppLabel_zhCN and AppLabel_zhTW:
-        check_line = ("SELECT * FROM ApkRepackSeedAppLabelDict "
+        check_line = ("SELECT * FROM apk_repack_seed_app_label "
                     "WHERE SeedID = %s "
                     "AND AppLabel = %s "
                     "AND AppLabel_ja = %s "
@@ -338,7 +340,7 @@ def insert_label(conn, SeedID, AppLabel, AppLabel_ja, AppLabel_zhCN, AppLabel_zh
                     "AND AppLabel_zhTW = %s")
 
     if AppLabel_ja and AppLabel_zhCN and not AppLabel_zhTW:
-        check_line = ("SELECT * FROM ApkRepackSeedAppLabelDict "
+        check_line = ("SELECT * FROM apk_repack_seed_app_label "
                     "WHERE SeedID = %s "
                     "AND AppLabel = %s "
                     "AND AppLabel_ja = %s "
@@ -346,7 +348,7 @@ def insert_label(conn, SeedID, AppLabel, AppLabel_ja, AppLabel_zhCN, AppLabel_zh
                     "AND AppLabel_zhTW IS %s")
 
     if AppLabel_ja and AppLabel_zhCN and AppLabel_zhTW:
-        check_line = ("SELECT * FROM ApkRepackSeedAppLabelDict "
+        check_line = ("SELECT * FROM apk_repack_seed_app_label "
                     "WHERE SeedID = %s "
                     "AND AppLabel = %s "
                     "AND AppLabel_ja = %s "
@@ -356,7 +358,7 @@ def insert_label(conn, SeedID, AppLabel, AppLabel_ja, AppLabel_zhCN, AppLabel_zh
         cursor.execute(check_line, (SeedID, AppLabel, AppLabel_ja, AppLabel_zhCN, AppLabel_zhTW))
         is_exist = cursor.fetchone()
 
-        sql_line = ("INSERT INTO ApkRepackSeedAppLabelDict ("
+        sql_line = ("INSERT INTO apk_repack_seed_app_label ("
                 "SeedID, AppLabel, AppLabel_ja, AppLabel_zhCN, AppLabel_zhTW) "
                 "VALUES (%s, %s, %s, %s, %s)")
         logger.info("label is exist: %s" % str(is_exist))
@@ -394,33 +396,35 @@ def gen_sql(candidate_list, icon_hash, seed_sha1):
 def main(act, source):
     now = datetime.datetime.now()
     str_now = now.strftime("%Y%m%d%H%M%S")
-    conn = connect(MASTER_DB_USER, MASTER_DB_PASSWD, MASTER_DB_HOST, MASTER_DB_NAME)
-    cursor = conn.cursor()
+    conn_cloud = connect(CLOUD_DB_USER, CLOUD_DB_PASSWD, CLOUD_DB_HOST, CLOUD_DB_NAME)
+    conn_global = connect(GLOBAL_DB_USER, GLOBAL_DB_PASSWD, GLOBAL_DB_HOST, GLOBAL_DB_NAME)
+    cursor_cloud = conn_cloud.cursor()
+    cursor_global = conn_global.cursor()
     implFolder = os.path.join(os.path.dirname(os.path.abspath(__file__)), "APKS")
     file_list = sorted([os.path.join(implFolder, fo) for fo in os.listdir(implFolder)])
     if act == 'add':
         logger.info("begin run: %s" % str(__file__))
         f1 = open('_insert_sql_lines.sql', 'w')
-        f1.writelines('mysql -umars -h 10.64.202.11 -p --default-character-set=utf8 -e"use mars2_1; ')
+        f1.writelines('mysql -umars -h 10.64.202.11 -p --default-character-set=utf8 -e"use mars2_1; ') #TODO 根据ip和表改变
         # candidate_tuple = query_repack_info(conn)
         sql_items = ""
         for file_path in file_list:
             if os.path.isfile(file_path):
                 sha1 = cal_sha1(file_path, logger)
                 logger.debug(sha1)
-                publickey = query_public_key(conn, sha1)
-                app_label = get_app_label(conn, sha1)
+                publickey = query_public_key(conn_cloud, sha1)
+                app_label = get_app_label(conn_cloud, sha1)
                 logger.debug(app_label)
                 if publickey and app_label:
                     icon_hash = cal_icon_hash(file_path, logger)
                     # if source == 'GooglePlay':
-                    pkg_name = query_pkg_name(conn, sha1)
-                    (AppLabel_ja, AppLabel_zhCN, AppLabel_zhTW) = query_applabel(conn, sha1)
+                    pkg_name = query_pkg_name(conn_cloud, sha1)
+                    (AppLabel_ja, AppLabel_zhCN, AppLabel_zhTW) = query_applabel(conn_global, sha1)  
                     # original_url = "https://play.google.com/store/apps/details?id=" + pkg_name
-                    insert_seed(conn, publickey, pkg_name, 1, 6, 4, 0, 95, source, str_now)
-                    SeedID = check_seed_id(conn, publickey, pkg_name)
-                    insert_icon(conn, SeedID, icon_hash)
-                    insert_label(conn, SeedID, app_label, AppLabel_ja, AppLabel_zhCN, AppLabel_zhTW)
+                    insert_seed(conn_cloud, publickey, pkg_name, 1, 6, 4, 0, 95, source, str_now)
+                    SeedID = check_seed_id(conn_cloud, publickey, pkg_name)
+                    insert_icon(conn_cloud, SeedID, icon_hash)
+                    insert_label(conn_cloud, SeedID, app_label, AppLabel_ja, AppLabel_zhCN, AppLabel_zhTW)
                     logger.info('Sha1: %s' % sha1)
                     logger.info('AppLabel: %s' % app_label)
                     logger.info('Generating Insert SQL Line:')
@@ -446,28 +450,30 @@ def main(act, source):
             if os.path.isfile(file_path):
                 sha1 = cal_sha1(file_path, logger)
                 logger.debug(sha1)
-                publickey = query_public_key(conn, sha1)
-                pkg_name = query_pkg_name(conn, sha1)
-                SeedID = check_seed_id(conn, publickey, pkg_name)
+                publickey = query_public_key(conn_cloud, sha1)
+                pkg_name = query_pkg_name(conn_cloud, sha1)
+                SeedID = check_seed_id(conn_cloud, publickey, pkg_name)
                 if publickey and pkg_name and SeedID:
-                    cursor.execute("DELETE FROM ApkRepackSEED WHERE PublicKeySha1List = %s AND PkgName = %s", (publickey, pkg_name))
-                    cursor.execute("DELETE FROM ApkRepackSeedIconHashDict WHERE SeedID = %s", (SeedID,))
-                    cursor.execute("DELETE FROM ApkRepackSeedAppLabelDict WHERE SeedID = %s", (SeedID,))
-                    cursor.execute("UPDATE ApkRepackINFO "
+                    cursor_cloud.execute("DELETE FROM apk_repack_seed WHERE publicKeySha1 = 0x%s AND packageName = '%s'" % (publickey, pkg_name))
+                    cursor_cloud.execute("DELETE FROM apk_repack_seed_icon_hash WHERE SeedID = %s", (SeedID,))
+                    cursor_cloud.execute("DELETE FROM apk_repack_seed_app_label WHERE SeedID = %s", (SeedID,))
+                    cursor_global.execute("UPDATE apk_repack_info "  
                                    "SET IsOriginal = 0, "
                                    "RepackFrom = NULL, "
                                    "LabelScore = NULL, "
                                    "IconScore = NULL, "
                                    "DefaultScore = NULL WHERE RepackFrom = %s", (SeedID,))
 
-                    conn.commit()
+                    conn_cloud.commit()
+                    conn_global.commit()
         move_apks(act, '', str_now)
 
     else:
         print "Add seeds in APKS/:\n    python %s add [Source Name]" % (sys.argv[0])
         print "Del seeds in APKS/:\n    python %s del" % (sys.argv[0])
 
-    conn.close()
+    conn_cloud.close()
+    conn_global.close()
     move_apks(act, sourcing, str_now)
 
 
